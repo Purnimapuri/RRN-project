@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/config/db.php';
 require_once __DIR__ . '/includes/functions.php';
+require_once __DIR__ . '/config/payment.php';
 requireLogin();
 
 $userId = $_SESSION['user_id'];
@@ -39,22 +40,68 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (empty($errors)) {
-        // NOTE: This is a simulated payment flow for the academic project.
-        // In production this step would redirect to eSewa / Khalti's hosted
-        // checkout and verify the transaction via their signature/callback API.
-        $txnCode = strtoupper($gateway) . '-' . strtoupper(bin2hex(random_bytes(5)));
+        $total = (float)$reservation['total_amount'];
+        $ref   = makeOrderRef($reservationId);
+        $_SESSION['pay_ref_' . $reservationId] = $ref;        // remembered to check on return
+        $_SESSION['last_pay_reservation']      = $reservationId;
 
-        $insert = $pdo->prepare("
-            INSERT INTO payments (reservation_id, gateway, transaction_code, amount, payment_status, paid_at)
-            VALUES (?, ?, ?, ?, 'Success', NOW())
-        ");
-        $insert->execute([$reservationId, $gateway, $txnCode, $reservation['total_amount']]);
+        // ---------------- eSewa: send the customer to eSewa with a signed form ----------------
+        if ($gateway === 'eSewa') {
+            $amount = (string)$total;                          // e.g. "2500"
+            $fields = [
+                'amount'                  => $amount,
+                'tax_amount'              => '0',
+                'total_amount'            => $amount,
+                'transaction_uuid'        => $ref,
+                'product_code'            => ESEWA_PRODUCT_CODE,
+                'product_service_charge'  => '0',
+                'product_delivery_charge' => '0',
+                'success_url'             => BASE_URL . '/esewa-return.php',
+                'failure_url'             => BASE_URL . '/esewa-failed.php',
+                'signed_field_names'      => 'total_amount,transaction_uuid,product_code',
+            ];
+            $fields['signature'] = esewaSign(
+                'total_amount=' . $amount . ',transaction_uuid=' . $ref . ',product_code=' . ESEWA_PRODUCT_CODE
+            );
+            ?>
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Redirecting to eSewa...</title></head>
+<body>
+  <p>Redirecting to eSewa, please wait...</p>
+  <form id="esewaForm" method="POST" action="<?php echo e(ESEWA_FORM_URL); ?>">
+    <?php foreach ($fields as $k => $v): ?>
+      <input type="hidden" name="<?php echo e($k); ?>" value="<?php echo e($v); ?>">
+    <?php endforeach; ?>
+    <noscript><button type="submit">Continue to eSewa</button></noscript>
+  </form>
+  <script>document.getElementById('esewaForm').submit();</script>
+</body></html>
+            <?php
+            exit;
+        }
 
-        $updateRes = $pdo->prepare("UPDATE reservations SET status = 'Pending' WHERE reservation_id = ?");
-        $updateRes->execute([$reservationId]);
-
-        setFlash('success', 'Payment successful! Your booking request has been submitted for admin approval.');
-        redirect('booking-confirmation.php?reservation_id=' . $reservationId);
+        // ---------------- Khalti: ask Khalti for a payment link, then redirect ----------------
+        if ($gateway === 'Khalti') {
+            if (strpos(KHALTI_SECRET_KEY, 'PASTE_') === 0) {
+                $errors[] = 'Khalti key is not set yet. Add your sandbox secret key in config/payment.php.';
+            } elseif ($total < 10) {
+                $errors[] = 'Khalti needs a payment of at least Rs. 10.';
+            } else {
+                [$code, $resp, $curlErr] = khaltiPost('/epayment/initiate/', [
+                    'return_url'          => BASE_URL . '/khalti-return.php',
+                    'website_url'         => BASE_URL . '/',
+                    'amount'              => (int)round($total * 100),     // Khalti wants paisa
+                    'purchase_order_id'   => $ref,
+                    'purchase_order_name' => 'Rental: ' . $reservation['vehicle_name'],
+                ]);
+                if ($code === 200 && !empty($resp['payment_url']) && !empty($resp['pidx'])) {
+                    $_SESSION['khalti_pidx_' . $reservationId] = $resp['pidx'];
+                    redirect($resp['payment_url']);
+                }
+                error_log('Khalti initiate failed: HTTP ' . $code . ' ' . json_encode($resp) . ' ' . $curlErr);
+                $errors[] = 'Could not start the Khalti payment. ' . ($curlErr ?: json_encode($resp));
+            }
+        }
     }
 }
 
@@ -108,7 +155,9 @@ require_once __DIR__ . '/includes/header.php';
         </div>
 
         <button type="submit" class="btn btn-primary btn-block">Pay <?php echo formatNPR($reservation['total_amount']); ?></button>
-        <p class="form-hint text-center mt-2">This is a demo payment flow for academic purposes; no real transaction is processed.</p>
+        <?php if (PAYMENT_MODE === 'sandbox'): ?>
+          <p class="form-hint text-center mt-2">Test mode: you will be taken to the gateway's test page and no real money is charged.</p>
+        <?php endif; ?>
       </form>
     </div>
   </div>

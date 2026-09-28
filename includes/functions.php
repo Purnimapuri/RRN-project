@@ -114,3 +114,9 @@ function calculateDays($pickup, $return) {
     $diff = $d1->diff($d2)->days;
     return max(1, $diff);
 }
+
+function getUserLicense($pdo, $userId) {
+    $stmt = $pdo->prepare("SELECT * FROM driving_licenses WHERE user_id = ? ORDER BY submitted_at DESC LIMIT 1");
+    $stmt->execute([$userId]);
+    return $stmt->fetch();
+}

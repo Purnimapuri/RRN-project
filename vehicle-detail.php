@@ -49,18 +49,38 @@ require_once __DIR__ . '/includes/header.php';
         </h3>
 
         <?php if ($vehicle['availability'] === 'Available'): ?>
-          <div class="form-group mt-2">
-            <label for="pickup_date">Pickup Date</label>
-            <input type="date" id="pickup_date" min="<?php echo date('Y-m-d'); ?>">
-          </div>
-          <div class="form-group">
-            <label for="return_date">Return Date</label>
-            <input type="date" id="return_date" min="<?php echo date('Y-m-d'); ?>">
-          </div>
-          <p class="form-hint" id="costEstimate">Select pickup and return dates to see the estimated cost.</p>
+          <!-- CHANGED: a real form, so the chosen dates are sent to reserve.php -->
+          <form method="GET" action="reserve.php">
+            <input type="hidden" name="vehicle_id" value="<?php echo (int)$vehicle['vehicle_id']; ?>">
 
-          <a href="reserve.php?vehicle_id=<?php echo (int)$vehicle['vehicle_id']; ?>" class="btn btn-primary btn-block mt-2">Reserve This Vehicle</a>
-          <p class="form-hint text-center">You'll confirm exact dates and license details on the next step.</p>
+            <div class="form-group mt-2">
+              <label for="pickup_date">Pickup Date</label>
+              <input type="date" id="pickup_date" name="pickup_date" min="<?php echo date('Y-m-d'); ?>" required>
+            </div>
+            <div class="form-group">
+              <label for="return_date">Return Date</label>
+              <input type="date" id="return_date" name="return_date" min="<?php echo date('Y-m-d'); ?>" required>
+            </div>
+            <p class="form-hint" id="costEstimate">Select pickup and return dates to see the estimated cost.</p>
+
+            <button type="submit" class="btn btn-primary btn-block mt-2">Reserve This Vehicle</button>
+            <p class="form-hint text-center">You'll add your license details on the next step.</p>
+          </form>
+
+          <script>
+            // Return date can never be on or before the pickup date
+            (function () {
+              var p = document.getElementById('pickup_date');
+              var r = document.getElementById('return_date');
+              p.addEventListener('change', function () {
+                if (!p.value) return;
+                var d = new Date(p.value);
+                d.setDate(d.getDate() + 1);
+                r.min = d.toISOString().slice(0, 10);
+                if (r.value && r.value < r.min) r.value = '';
+              });
+            })();
+          </script>
         <?php else: ?>
           <p class="muted mt-2">This vehicle is currently unavailable for booking.</p>
           <a href="vehicles.php" class="btn btn-outline btn-block">Browse Other Vehicles</a>
